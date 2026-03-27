@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+transformers
+torch
+accelerate
+psutil
+pynvml
+prometheus-client
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp
+python-dotenv
+requests
+arize
