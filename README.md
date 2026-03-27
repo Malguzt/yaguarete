@@ -33,5 +33,15 @@ python src/main.py
 - `GET /v1/models`: Listado de modelos disponibles en el catálogo.
 - `GET /metrics`: Métricas para Prometheus.
 
+## Monitoreo y Observabilidad
+
+Yaguarete expone métricas en `/metrics` para Prometheus. 
+Hemos incluido un tablero de Grafana pre-configurado en [grafana_dashboard.json](file:///home/jose/projects/metahumans/yaguarete/grafana_dashboard.json).
+
+Para usarlo:
+1. En Grafana, ve a **Dashboards** > **Import**.
+2. Sube el archivo `grafana_dashboard.json` o pega su contenido.
+3. Selecciona tu datasource de **Prometheus**.
+
 ---
 Para más detalles sobre el algoritmo de enrutamiento, consulta [router_documentation.md](file:///home/jose/.gemini/antigravity/brain/c6e11bcb-8590-4413-8313-385a5a46575e/router_documentation.md).
