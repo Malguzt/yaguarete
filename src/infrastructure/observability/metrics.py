@@ -138,3 +138,24 @@ HARDWARE_GPU_UTILIZATION_PERCENT = Gauge(
     "Current GPU utilization in percentage",
     ["node", "gpu_id", "gpu_name"],
 )
+
+# --- Router Metrics ---
+
+# Recommended Alert Rule:
+# - name: LowModelEffectiveness
+#   expr: yaguarete_model_effectiveness < 0.6
+#   for: 5m
+#   labels:
+#     severity: warning
+
+ROUTER_MODEL_EFFECTIVENESS = Gauge(
+    "yaguarete_model_effectiveness", 
+    "Current effectiveness score of the model",
+    ["model_id"]
+)
+
+ROUTER_AVG_TIME_PER_CHAR = Gauge(
+    "yaguarete_avg_time_per_char_ms", 
+    "Average processing time per input character in ms",
+    ["model_id"]
+)

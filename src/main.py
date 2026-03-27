@@ -23,6 +23,10 @@ from infrastructure.transformers_engine.models_handler import ModelsHandler
 from infrastructure.transformers_engine.model_catalog import ModelComplexity, ModelCatalog
 from infrastructure.observability.metrics import NODE_NAME
 from infrastructure.observability.hardware_metrics_collector import HardwareMetricsCollector
+from application.router.router_service import RouterService
+from infrastructure.repositories.router_stats_repository import RouterStatsRepository
+from infrastructure.transformers_engine.embedding_engine import EmbeddingEngine
+import uuid
 
 app = FastAPI(title="Yaguarete LLM Proxy", version="1.0.0")
 
@@ -56,6 +60,7 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.7
     max_tokens: Optional[int] = None
     stream: Optional[bool] = False
+    user: Optional[str] = None
 
 class ChatCompletionResponseChoice(BaseModel):
     message: ChatMessage
@@ -74,10 +79,16 @@ class ChatCompletionResponse(BaseModel):
         "total_tokens": 0
     }
 
+from application.router.quality_evaluator import QualityEvaluator
+
 # --- State ---
 
 models_handler = ModelsHandler()
 metrics_collector = HardwareMetricsCollector(interval=5)
+stats_repo = RouterStatsRepository()
+embedding_engine = EmbeddingEngine()
+router_service = RouterService(stats_repo, embedding_engine)
+quality_evaluator = QualityEvaluator(models_handler)
 
 @app.on_event("startup")
 async def startup_event():
@@ -120,19 +131,88 @@ async def chat_completions(request: ChatCompletionRequest):
         raise HTTPException(status_code=400, detail="No user messages found")
     
     prompt = user_messages[-1]
+    # Use OpenRouter 'user' field as session_id if available, or generate one
+    session_id = getattr(request, 'user', None) or "default-session"
+    
+    start_time = time.perf_counter()
     
     try:
-        # Determine complexity from model-id if possible
+        # 1. Generate embedding first (Mandatory for similarity-based routing)
+        embedding = embedding_engine.get_embeddings(prompt)
+        
+        # 2. Determine model using Router Service
+        if not request.model or request.model == "yaguarete/auto":
+            model_id = router_service.route_request(prompt, session_id, embedding)
+        else:
+            model_id = request.model
+            
+        print(f"[INFO] Routing to model: {model_id}")
+        
+        # 3. Determine complexity for models_handler
         required_complexity = None
         for model_def in ModelCatalog().models:
-            if model_def.huggingface_id == request.model:
+            if model_def.huggingface_id == model_id:
                 required_complexity = model_def.complexity
                 break
         
         response_text = models_handler.generate_text(prompt, required_complexity=required_complexity)
         
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        
+        # Calculate cost
+        catalog = ModelCatalog()
+        cost = 0.0
+        for m in catalog.models:
+            if m.huggingface_id == model_id:
+                cost = (len(prompt) + len(response_text)) * (m.cost_per_1k_chars / 1000)
+                break
+
+        # Evaluate quality
+        quality_scores = quality_evaluator.evaluate_response(prompt, response_text)
+        
+        # Shadowing: 5% chance to compare with another model
+        shadow_model_id = router_service.select_shadow_model(model_id, required_complexity)
+        if shadow_model_id:
+            print(f"[SHADOW] Running comparison with {shadow_model_id}")
+            try:
+                shadow_resp = models_handler.generate_text(prompt, model_id=shadow_model_id)
+                # Compare semantic similarity
+                primary_emb = embedding_engine.get_embeddings(response_text)
+                shadow_emb = embedding_engine.get_embeddings(shadow_resp)
+                similarity = embedding_engine.calculate_similarity(primary_emb, shadow_emb)
+                
+                # If they diverge too much, slightly penalize both or flag for review
+                if similarity < 0.7:
+                    print(f"[SHADOW] High divergence detected! Similarity: {similarity:.2f}")
+                    # Update judge_score to reflect uncertainty
+                    quality_scores["judge_score"] *= 0.8
+            except Exception as e:
+                print(f"[SHADOW] Error during shadowing: {e}")
+
+        # Log stats
+        stats_repo.log_request({
+            "model_id": model_id,
+            "request_id": str(uuid.uuid4()),
+            "input_chars": len(prompt),
+            "output_chars": len(response_text),
+            "duration_ms": duration_ms,
+            "cost": cost,
+            "topic": "general",
+            "session_id": session_id,
+            "embedding": embedding,
+            **quality_scores
+        })
+        
+        # Update Prometheus metrics
+        from infrastructure.observability.metrics import ROUTER_MODEL_EFFECTIVENESS, ROUTER_AVG_TIME_PER_CHAR
+        
+        # Calculate a combined effectiveness for live monitoring
+        combined_eff = (quality_scores["judge_score"] * 0.5) + (quality_scores["format_score"] * 0.3) + (quality_scores["density_score"] * 0.2)
+        ROUTER_MODEL_EFFECTIVENESS.labels(model_id=model_id).set(combined_eff)
+        ROUTER_AVG_TIME_PER_CHAR.labels(model_id=model_id).set(duration_ms / max(len(prompt), 1))
+        
         return ChatCompletionResponse(
-            model=request.model,
+            model=model_id,
             choices=[
                 ChatCompletionResponseChoice(
                     message=ChatMessage(role="assistant", content=response_text),

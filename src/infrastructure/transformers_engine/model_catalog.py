@@ -20,6 +20,7 @@ class ModelDefinition:
     specialty: ModelSpecialty
     # Estimated VRAM required in GB for full GPU load (FP16 typical)
     estimated_vram_gb: float
+    cost_per_1k_chars: float = 0.0001 # Default base cost
 
 class ModelCatalog:
     """Catalog of locally available or configured Hugging Face models."""
@@ -31,32 +32,44 @@ class ModelCatalog:
                 huggingface_id="Qwen/Qwen2.5-1.5B-Instruct",
                 complexity=ModelComplexity.SMALL,
                 specialty=ModelSpecialty.CHAT,
-                estimated_vram_gb=4.0
+                estimated_vram_gb=4.0,
+                cost_per_1k_chars=0.00005
             ),
             ModelDefinition(
                 huggingface_id="Qwen/Qwen2.5-7B-Instruct",
                 complexity=ModelComplexity.MEDIUM,
                 specialty=ModelSpecialty.CHAT,
-                estimated_vram_gb=15.0 # ~14GB BF16 + overhead
+                estimated_vram_gb=15.0,
+                cost_per_1k_chars=0.0002
             ),
             ModelDefinition(
                 huggingface_id="Qwen/Qwen2.5-Coder-1.5B",
                 complexity=ModelComplexity.SMALL,
                 specialty=ModelSpecialty.CODE,
-                estimated_vram_gb=4.0
+                estimated_vram_gb=4.0,
+                cost_per_1k_chars=0.00005
             ),
             ModelDefinition(
                 huggingface_id="Qwen/Qwen2.5-Coder-7B",
                 complexity=ModelComplexity.MEDIUM,
                 specialty=ModelSpecialty.CODE,
-                estimated_vram_gb=15.0 # ~14GB BF16 + overhead
+                estimated_vram_gb=15.0,
+                cost_per_1k_chars=0.0002
             ),
             ModelDefinition(
                 huggingface_id="Qwen/Qwen2.5-32B-Instruct",
                 complexity=ModelComplexity.LARGE,
                 specialty=ModelSpecialty.REASONING,
-                estimated_vram_gb=68.0 # ~64GB BF16 + overhead
-            ) # Large models will naturally use device_map="auto" to offload to RAM
+                estimated_vram_gb=68.0,
+                cost_per_1k_chars=0.001
+            ),
+            ModelDefinition(
+                huggingface_id="distilbert-base-uncased-finetuned-sst-2-english",
+                complexity=ModelComplexity.SMALL,
+                specialty=ModelSpecialty.CHAT, # Used for sentiment
+                estimated_vram_gb=1.0,
+                cost_per_1k_chars=0.00001
+            )
         ]
         
     def find_best_model(self, required_complexity: ModelComplexity, required_specialty: ModelSpecialty) -> Optional[ModelDefinition]:
