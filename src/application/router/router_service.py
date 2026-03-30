@@ -24,7 +24,7 @@ class RouterService:
         # 2. Check session history for immediate feedback (repreguntas similares)
         last_input = self.stats_repo.get_last_session_input(session_id)
         if last_input:
-            similarity = self.embedding_engine.calculate_similarity(embedding, last_input["embedding"])
+            similarity = self.embedding_engine.cosine_similarity(embedding, last_input["embedding"])
             if similarity > 0.85:
                 print(f"[INFO] High similarity ({similarity:.2f}) detected in session {session_id}. Penalizing previous model.")
                 self.stats_repo.penalize_last_request(session_id)

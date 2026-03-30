@@ -138,7 +138,7 @@ async def chat_completions(request: ChatCompletionRequest):
     
     try:
         # 1. Generate embedding first (Mandatory for similarity-based routing)
-        embedding = embedding_engine.get_embeddings(prompt)
+        embedding = embedding_engine.get_embedding(prompt)
         
         # 2. Determine model using Router Service
         if not request.model or request.model == "yaguarete/auto":
