@@ -107,14 +107,24 @@ class PhoenixFeedbackScheduler:
                 response,
                 analysis_model_id=analysis_model_id,
             )
-            self.stats_repo.update_quality_scores(request_id=request_id, **quality_scores)
+            self.stats_repo.update_quality_scores(
+                request_id=request_id,
+                format_score=float(quality_scores.get("format_score", 1.0)),
+                density_score=float(quality_scores.get("density_score", 1.0)),
+                judge_score=float(quality_scores.get("judge_score", 1.0)),
+                sentiment_score=float(quality_scores.get("sentiment_score", 0.0)),
+            )
 
             pending_payload: dict[str, Any] | None
             with self._lock:
                 pending_payload = self._pending.pop(request_id, None)
 
             if pending_payload:
-                from infrastructure.observability.metrics import ROUTER_MODEL_EFFECTIVENESS, ROUTER_AVG_TIME_PER_CHAR
+                from infrastructure.observability.metrics import (
+                    ROUTER_MODEL_EFFECTIVENESS,
+                    ROUTER_AVG_TIME_PER_CHAR,
+                    ROUTER_HALLUCINATION_SCORE,
+                )
 
                 model_id = str(pending_payload.get("model_id", "unknown"))
                 duration_ms = float(pending_payload.get("duration_ms", 0.0))
@@ -125,6 +135,9 @@ class PhoenixFeedbackScheduler:
                 )
                 ROUTER_MODEL_EFFECTIVENESS.labels(model_id=model_id).set(combined_eff)
                 ROUTER_AVG_TIME_PER_CHAR.labels(model_id=model_id).set(duration_ms / max(len(prompt), 1))
+                ROUTER_HALLUCINATION_SCORE.labels(model_id=model_id).set(
+                    float(quality_scores.get("hallucination_score", 1.0))
+                )
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():

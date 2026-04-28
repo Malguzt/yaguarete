@@ -1,8 +1,10 @@
 import json
+import os
 import re
 from typing import Dict
 from infrastructure.transformers_engine.models_handler import ModelsHandler
 from infrastructure.transformers_engine.model_catalog import ModelComplexity
+from application.router.hallucination_detector import HallucinationDetector
 
 class QualityEvaluator:
     """
@@ -10,6 +12,16 @@ class QualityEvaluator:
     """
     def __init__(self, models_handler: ModelsHandler) -> None:
         self.models_handler = models_handler
+        self.enable_hallucination_detection = os.getenv("ENABLE_HALLUCINATION_DETECTION", "1").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        self.enable_hallucination_llm_fact_check = os.getenv(
+            "ENABLE_HALLUCINATION_LLM_FACT_CHECK",
+            "0",
+        ).lower() in ("1", "true", "yes")
+        self.hallucination_detector = HallucinationDetector(models_handler=models_handler)
 
     def evaluate_response(
         self,
@@ -20,11 +32,28 @@ class QualityEvaluator:
         """
         Returns a dict of scores between 0.0 and 1.0
         """
+        format_score = self._check_format(prompt, response)
+        density_score = self._check_density(prompt, response)
+        judge_score = self._judge_relevance(prompt, response, analysis_model_id=analysis_model_id)
+        sentiment_score = self._check_sentiment(response, analysis_model_id=analysis_model_id)
+        hallucination_score = 1.0
+
+        if self.enable_hallucination_detection:
+            hallucination = self.hallucination_detector.detect_hallucinations(
+                prompt=prompt,
+                response=response,
+                analysis_model_id=analysis_model_id,
+                use_llm_fact_check=self.enable_hallucination_llm_fact_check,
+            )
+            hallucination_score = float(hallucination["hallucination_score"])
+            judge_score = min(judge_score, hallucination_score)
+
         return {
-            "format_score": self._check_format(prompt, response),
-            "density_score": self._check_density(prompt, response),
-            "judge_score": self._judge_relevance(prompt, response, analysis_model_id=analysis_model_id),
-            "sentiment_score": self._check_sentiment(response, analysis_model_id=analysis_model_id)
+            "format_score": format_score,
+            "density_score": density_score,
+            "judge_score": judge_score,
+            "sentiment_score": sentiment_score,
+            "hallucination_score": hallucination_score,
         }
 
     def _check_sentiment(self, text: str, analysis_model_id: str | None = None) -> float:

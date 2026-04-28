@@ -6,6 +6,7 @@ from infrastructure.transformers_engine.model_catalog import ModelCatalog, Model
 from infrastructure.repositories.router_stats_repository import RouterStatsRepository
 from infrastructure.transformers_engine.embedding_engine import EmbeddingEngine
 from application.router.cognitive_planner import CognitivePlanner
+from application.router.drift_detector import DriftDetector
 
 class RouterService:
     """
@@ -17,6 +18,7 @@ class RouterService:
         self.stats_repo = stats_repo
         self.embedding_engine = embedding_engine
         self.allow_remote = os.getenv("ROUTER_ALLOW_REMOTE_MODELS", "false").lower() in ("1", "true", "yes")
+        self.drift_detector = DriftDetector(stats_repo=stats_repo)
 
     def route_request(self, prompt: str, session_id: str, embedding: list[float]) -> str:
         # 1. Similarity-Based Performance Analysis (k-NN)
@@ -49,6 +51,9 @@ class RouterService:
         scores = {}
         for model in all_models:
             mid = model.huggingface_id
+            if self.drift_detector.should_skip_model(mid):
+                print(f"[WARNING] Skipping model {mid} due to active drift cooldown")
+                continue
             global_stats = self.stats_repo.get_model_performance(mid)
             local_stats = similar_stats.get(mid)
             
@@ -109,6 +114,9 @@ class RouterService:
             print(f"[DEBUG] Model {mid} score: {score:.2f} (local: {local_stats is not None})")
 
         if not scores:
+            for model in all_models:
+                if not self.drift_detector.should_skip_model(model.huggingface_id):
+                    return model
             return self.catalog.get_default_model()
             
         best_mid = max(scores.items(), key=lambda x: x[1])[0]

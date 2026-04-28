@@ -159,3 +159,33 @@ ROUTER_AVG_TIME_PER_CHAR = Gauge(
     "Average processing time per input character in ms",
     ["model_id"]
 )
+
+ROUTER_FEEDBACK_ALPHA_CURRENT = Gauge(
+    "yaguarete_feedback_alpha_current",
+    "Current adaptive alpha used for feedback smoothing",
+    ["model_id"],
+)
+
+ROUTER_MODEL_DRIFT_SCORE = Gauge(
+    "yaguarete_model_drift_score",
+    "Recent vs baseline effectiveness delta per model (negative means degradation)",
+    ["model_id"],
+)
+
+ROUTER_MODEL_COOLDOWN = Gauge(
+    "yaguarete_model_cooldown",
+    "Whether model is currently in cooldown due to drift/failures (1=yes, 0=no)",
+    ["model_id"],
+)
+
+ROUTER_MODEL_DRIFT_EVENTS_TOTAL = Counter(
+    "yaguarete_model_drift_events_total",
+    "Drift detector lifecycle events per model",
+    ["model_id", "event"],
+)
+
+ROUTER_HALLUCINATION_SCORE = Gauge(
+    "yaguarete_hallucination_score",
+    "Estimated hallucination confidence score per model response (1=safer)",
+    ["model_id"],
+)

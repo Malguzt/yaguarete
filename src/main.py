@@ -249,8 +249,8 @@ def _apply_feedback_to_request(
     if updated is None:
         raise HTTPException(status_code=404, detail=f"request_id not found: {request_id}")
 
-    alpha = float(os.getenv("ROUTER_FEEDBACK_ALPHA", "0.35"))
-    alpha = max(0.05, min(alpha, 0.95))
+    alpha = float(updated.get("feedback_alpha", os.getenv("ROUTER_FEEDBACK_ALPHA", "0.35")))
+    alpha = max(0.01, min(alpha, 0.95))
     return FeedbackResponse(
         status="accepted",
         request_id=request_id,

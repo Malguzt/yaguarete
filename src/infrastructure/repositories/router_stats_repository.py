@@ -158,8 +158,8 @@ class RouterStatsRepository:
         feedback_source: str,
         feedback_user: str,
     ) -> Optional[dict[str, float]]:
-        alpha = float(os.getenv("ROUTER_FEEDBACK_ALPHA", "0.35"))
-        alpha = max(0.05, min(alpha, 0.95))
+        alpha_min = max(0.01, float(os.getenv("ROUTER_FEEDBACK_ALPHA_MIN", "0.05")))
+        alpha_max = max(alpha_min, float(os.getenv("ROUTER_FEEDBACK_ALPHA_MAX", "0.95")))
         score_clamped = max(-1.0, min(1.0, float(feedback_score)))
         target_effectiveness = (score_clamped + 1.0) / 2.0
 
@@ -167,7 +167,7 @@ class RouterStatsRepository:
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT effectiveness_score FROM model_stats WHERE request_id = ?",
+                "SELECT effectiveness_score, model_id FROM model_stats WHERE request_id = ?",
                 (request_id,),
             )
             row = cursor.fetchone()
@@ -175,6 +175,14 @@ class RouterStatsRepository:
                 return None
 
             current_effectiveness = float(row["effectiveness_score"] or 0.5)
+            model_id = str(row["model_id"] or "")
+            adaptive_enabled = os.getenv("ENABLE_ADAPTIVE_ALPHA", "1").lower() in ("1", "true", "yes")
+            if adaptive_enabled and model_id:
+                alpha = self.get_adaptive_feedback_alpha(model_id=model_id)
+            else:
+                alpha = float(os.getenv("ROUTER_FEEDBACK_ALPHA", "0.35"))
+                alpha = max(alpha_min, min(alpha, alpha_max))
+
             new_effectiveness = ((1.0 - alpha) * current_effectiveness) + (alpha * target_effectiveness)
 
             cursor.execute(
@@ -201,11 +209,109 @@ class RouterStatsRepository:
                 ),
             )
             conn.commit()
+
+            try:
+                from infrastructure.observability.metrics import ROUTER_FEEDBACK_ALPHA_CURRENT
+
+                if model_id:
+                    ROUTER_FEEDBACK_ALPHA_CURRENT.labels(model_id=model_id).set(alpha)
+            except Exception:
+                pass
             return {
                 "old_effectiveness": current_effectiveness,
                 "new_effectiveness": new_effectiveness,
                 "feedback_score": score_clamped,
+                "feedback_alpha": alpha,
             }
+
+    def get_adaptive_feedback_alpha(self, model_id: str) -> float:
+        alpha_min = max(0.01, float(os.getenv("ROUTER_FEEDBACK_ALPHA_MIN", "0.05")))
+        alpha_max = max(alpha_min, float(os.getenv("ROUTER_FEEDBACK_ALPHA_MAX", "0.5")))
+        base_alpha = float(os.getenv("ROUTER_FEEDBACK_ALPHA_BASE", "0.35"))
+        base_alpha = max(alpha_min, min(base_alpha, alpha_max))
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT effectiveness_score
+                FROM model_stats
+                WHERE model_id = ? AND timestamp > datetime('now', '-7 days')
+                ORDER BY timestamp DESC
+                LIMIT 100
+                """,
+                (model_id,),
+            )
+            rows = cursor.fetchall()
+
+        if not rows:
+            return alpha_max
+
+        scores = [float(row[0]) for row in rows if row and row[0] is not None]
+        if not scores:
+            return alpha_max
+
+        sample_count = len(scores)
+        variance = float(np.var(scores))
+
+        sample_factor = 1.0 / (1.0 + (sample_count / 20.0))
+        variance_factor = min(1.0, max(0.0, variance * 2.0))
+        alpha = base_alpha * max(0.05, (sample_factor + variance_factor) / 2.0)
+        alpha = max(alpha_min, min(alpha, alpha_max))
+
+        print(
+            f"[DEBUG] Adaptive alpha for {model_id}: samples={sample_count}, "
+            f"variance={variance:.4f}, alpha={alpha:.4f}"
+        )
+        return alpha
+
+    def get_model_effectiveness_window_stats(
+        self,
+        model_id: str,
+        recent_hours: int = 2,
+        baseline_hours: int = 24,
+    ) -> Optional[dict[str, float]]:
+        recent_hours = max(1, int(recent_hours))
+        baseline_hours = max(recent_hours + 1, int(baseline_hours))
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT AVG(effectiveness_score), COUNT(*)
+                FROM model_stats
+                WHERE model_id = ?
+                  AND timestamp >= datetime('now', ?)
+                """,
+                (model_id, f"-{recent_hours} hours"),
+            )
+            recent_row = cursor.fetchone()
+
+            cursor.execute(
+                """
+                SELECT AVG(effectiveness_score), COUNT(*)
+                FROM model_stats
+                WHERE model_id = ?
+                  AND timestamp >= datetime('now', ?)
+                """,
+                (model_id, f"-{baseline_hours} hours"),
+            )
+            baseline_row = cursor.fetchone()
+
+        recent_avg = float(recent_row[0]) if recent_row and recent_row[0] is not None else 0.0
+        recent_count = int(recent_row[1]) if recent_row and recent_row[1] is not None else 0
+        baseline_avg = float(baseline_row[0]) if baseline_row and baseline_row[0] is not None else 0.0
+        baseline_count = int(baseline_row[1]) if baseline_row and baseline_row[1] is not None else 0
+
+        if baseline_count == 0:
+            return None
+
+        return {
+            "recent_avg": recent_avg,
+            "recent_count": recent_count,
+            "baseline_avg": baseline_avg,
+            "baseline_count": baseline_count,
+            "drift_delta": recent_avg - baseline_avg,
+        }
 
     def get_model_performance(self, model_id: str) -> Optional[Dict]:
         with sqlite3.connect(self.db_path) as conn:
