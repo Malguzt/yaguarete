@@ -7,7 +7,7 @@ class CognitivePlanner:
     Uses a small local model to analyze the cognitive load of a request.
     Decides if the task is Simple, Medium, or Complex.
     """
-    def __init__(self, models_handler: ModelsHandler):
+    def __init__(self, models_handler: ModelsHandler) -> None:
         self.models_handler = models_handler
         # Planning is always done by the smallest efficient model
         self.planning_model_complexity = ModelComplexity.SMALL
@@ -33,8 +33,10 @@ class CognitivePlanner:
             )
             
             result = result.upper().strip()
-            if "LARGE" in result: return ModelComplexity.LARGE
-            if "MEDIUM" in result: return ModelComplexity.MEDIUM
+            if "LARGE" in result:
+                return ModelComplexity.LARGE
+            if "MEDIUM" in result:
+                return ModelComplexity.MEDIUM
             return ModelComplexity.SMALL
         except Exception as e:
             print(f"[ERROR] Planning failed: {e}. Falling back to SMALL.")

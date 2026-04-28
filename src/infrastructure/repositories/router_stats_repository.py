@@ -10,14 +10,16 @@ class RouterStatsRepository:
     Persistence layer for model performance, costs, and effectiveness.
     Uses SQLite for transactional integrity.
     """
-    def __init__(self, db_path: str = "data/router_stats.db"):
+    def __init__(self, db_path: str = "data/router_stats.db") -> None:
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.db_path = db_path
         self._init_db()
 
-    def _init_db(self):
+    def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA synchronous=NORMAL")
             # Table for model performance metrics
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS model_stats (
@@ -46,9 +48,57 @@ class RouterStatsRepository:
                     embedding_json TEXT
                 )
             """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_model_stats_model_ts ON model_stats(model_id, timestamp DESC)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_model_stats_session_ts ON model_stats(session_id, timestamp DESC)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_session_history_session_ts ON session_history(session_id, timestamp DESC)"
+            )
+            conn.commit()
+        self._ensure_schema_columns()
+        self._prune_old_records()
+
+    def _ensure_schema_columns(self) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(model_stats)")
+            rows = cursor.fetchall()
+            existing_columns = {str(row[1]) for row in rows if len(row) > 1}
+
+            if "feedback_score" not in existing_columns:
+                cursor.execute("ALTER TABLE model_stats ADD COLUMN feedback_score REAL")
+            if "feedback_label" not in existing_columns:
+                cursor.execute("ALTER TABLE model_stats ADD COLUMN feedback_label TEXT")
+            if "feedback_comment" not in existing_columns:
+                cursor.execute("ALTER TABLE model_stats ADD COLUMN feedback_comment TEXT")
+            if "feedback_source" not in existing_columns:
+                cursor.execute("ALTER TABLE model_stats ADD COLUMN feedback_source TEXT DEFAULT 'user'")
+            if "feedback_user" not in existing_columns:
+                cursor.execute("ALTER TABLE model_stats ADD COLUMN feedback_user TEXT")
+            if "feedback_timestamp" not in existing_columns:
+                cursor.execute("ALTER TABLE model_stats ADD COLUMN feedback_timestamp DATETIME")
             conn.commit()
 
-    def log_request(self, stats: Dict):
+    def _prune_old_records(self) -> None:
+        retention_days = int(os.getenv("ROUTER_STATS_RETENTION_DAYS", "30"))
+        if retention_days <= 0:
+            return
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM model_stats WHERE timestamp < datetime('now', ?)",
+                (f"-{retention_days} days",),
+            )
+            cursor.execute(
+                "DELETE FROM session_history WHERE timestamp < datetime('now', ?)",
+                (f"-{retention_days} days",),
+            )
+            conn.commit()
+
+    def log_request(self, stats: Dict) -> None:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -66,11 +116,96 @@ class RouterStatsRepository:
             ))
             conn.commit()
 
-    def update_effectiveness(self, request_id: str, score: float):
+    def update_effectiveness(self, request_id: str, score: float) -> None:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("UPDATE model_stats SET effectiveness_score = ? WHERE request_id = ?", (score, request_id))
             conn.commit()
+
+    def update_quality_scores(
+        self,
+        request_id: str,
+        format_score: float,
+        density_score: float,
+        judge_score: float,
+        sentiment_score: float,
+    ) -> None:
+        combined_effectiveness = (judge_score * 0.5) + (format_score * 0.3) + (density_score * 0.2)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE model_stats
+                SET format_score = ?, sentiment_score = ?, judge_score = ?, effectiveness_score = ?
+                WHERE request_id = ?
+                """,
+                (format_score, sentiment_score, judge_score, combined_effectiveness, request_id),
+            )
+            conn.commit()
+
+    def request_exists(self, request_id: str) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1 FROM model_stats WHERE request_id = ? LIMIT 1", (request_id,))
+            return cursor.fetchone() is not None
+
+    def apply_user_feedback(
+        self,
+        request_id: str,
+        feedback_score: float,
+        feedback_label: str,
+        feedback_comment: str,
+        feedback_source: str,
+        feedback_user: str,
+    ) -> Optional[dict[str, float]]:
+        alpha = float(os.getenv("ROUTER_FEEDBACK_ALPHA", "0.35"))
+        alpha = max(0.05, min(alpha, 0.95))
+        score_clamped = max(-1.0, min(1.0, float(feedback_score)))
+        target_effectiveness = (score_clamped + 1.0) / 2.0
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT effectiveness_score FROM model_stats WHERE request_id = ?",
+                (request_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+
+            current_effectiveness = float(row["effectiveness_score"] or 0.5)
+            new_effectiveness = ((1.0 - alpha) * current_effectiveness) + (alpha * target_effectiveness)
+
+            cursor.execute(
+                """
+                UPDATE model_stats
+                SET effectiveness_score = ?,
+                    feedback_score = ?,
+                    feedback_label = ?,
+                    feedback_comment = ?,
+                    feedback_source = ?,
+                    feedback_user = ?,
+                    feedback_timestamp = ?
+                WHERE request_id = ?
+                """,
+                (
+                    new_effectiveness,
+                    score_clamped,
+                    feedback_label,
+                    feedback_comment,
+                    feedback_source,
+                    feedback_user,
+                    datetime.now(),
+                    request_id,
+                ),
+            )
+            conn.commit()
+            return {
+                "old_effectiveness": current_effectiveness,
+                "new_effectiveness": new_effectiveness,
+                "feedback_score": score_clamped,
+            }
 
     def get_model_performance(self, model_id: str) -> Optional[Dict]:
         with sqlite3.connect(self.db_path) as conn:
@@ -91,7 +226,7 @@ class RouterStatsRepository:
                 return dict(row)
             return None
 
-    def log_session_input(self, session_id: str, text: str, embedding: List[float]):
+    def log_session_input(self, session_id: str, text: str, embedding: list[float]) -> None:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -116,7 +251,7 @@ class RouterStatsRepository:
                 return res
             return None
 
-    def penalize_last_request(self, session_id: str):
+    def penalize_last_request(self, session_id: str) -> None:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             # Reduce effectiveness of the latest request in the session
@@ -128,7 +263,7 @@ class RouterStatsRepository:
             """, (session_id, session_id))
             conn.commit()
 
-    def get_similar_performance(self, query_embedding: List[float], top_k: int = 50) -> Dict[str, Dict]:
+    def get_similar_performance(self, query_embedding: list[float], top_k: int = 50) -> dict[str, Dict]:
         """
         Calculates performance metrics per model for historical requests similar to the query.
         """
@@ -156,7 +291,8 @@ class RouterStatsRepository:
             for row in rows:
                 try:
                     h_emb_json = row["embedding_json"]
-                    if not h_emb_json: continue
+                    if not h_emb_json:
+                        continue
                     h_emb = np.array(json.loads(h_emb_json))
                     if h_emb.shape == q_emb.shape:
                         norm_q = np.linalg.norm(q_emb)

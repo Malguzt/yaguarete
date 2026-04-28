@@ -1,0 +1,88 @@
+services:
+  yaguarete:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: yaguarete-llm-proxy
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CUDA_VISIBLE_DEVICES=0,1
+      # CPU tuning (override in .env based on host sizing)
+      - TORCH_NUM_THREADS=${TORCH_NUM_THREADS:-48}
+      - TORCH_NUM_INTEROP_THREADS=${TORCH_NUM_INTEROP_THREADS:-8}
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-48}
+      - MKL_NUM_THREADS=${MKL_NUM_THREADS:-48}
+      - OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-48}
+      - NUMEXPR_NUM_THREADS=${NUMEXPR_NUM_THREADS:-48}
+      - OMP_PROC_BIND=${OMP_PROC_BIND:-TRUE}
+      - OMP_PLACES=${OMP_PLACES:-cores}
+      - KMP_AFFINITY=${KMP_AFFINITY:-granularity=fine,compact,1,0}
+      - MALLOC_ARENA_MAX=${MALLOC_ARENA_MAX:-2}
+      # Phoenix endpoint for telemetry
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4318
+      - OTEL_BSP_SCHEDULE_DELAY_MS=${OTEL_BSP_SCHEDULE_DELAY_MS:-500}
+      - PHOENIX_API_URL=${PHOENIX_API_URL:-http://phoenix:6006}
+      - QUALITY_IDLE_SECONDS=${QUALITY_IDLE_SECONDS:-1.0}
+      - QUALITY_LOOP_INTERVAL_SEC=${QUALITY_LOOP_INTERVAL_SEC:-0.5}
+      - PHOENIX_LOOKBACK_SECONDS=${PHOENIX_LOOKBACK_SECONDS:-600}
+      # OpenRouter API credentials for remote model access
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_HTTP_REFERER=${OPENROUTER_HTTP_REFERER:-http://localhost:8001}
+      - OPENROUTER_X_TITLE=${OPENROUTER_X_TITLE:-Yaguarete LLM Proxy}
+      - ROUTER_ALLOW_REMOTE_MODELS=${ROUTER_ALLOW_REMOTE_MODELS:-false}
+      # LLMFit integration (local catalog replacement / ranking)
+      - LLMFIT_SERVICE_URL=${LLMFIT_SERVICE_URL:-http://host.docker.internal:8787}
+      - LLMFIT_MIN_FIT=${LLMFIT_MIN_FIT:-good}
+      - LLMFIT_LIMIT=${LLMFIT_LIMIT:-12}
+      - LLMFIT_REPLACE_LOCAL_MODELS=${LLMFIT_REPLACE_LOCAL_MODELS:-true}
+      - LLMFIT_CACHE_TTL_SEC=${LLMFIT_CACHE_TTL_SEC:-900}
+      - LLMFIT_SNAPSHOT_PATH=${LLMFIT_SNAPSHOT_PATH:-data/llmfit_local_catalog_snapshot.json}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - /tmp/donmingo-offload:/tmp/donmingo-offload
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    depends_on:
+      - phoenix
+    networks:
+      - yaguarete-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Phoenix OpenTelemetry collector for observability
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: phoenix-otel
+    ports:
+      - "${PHOENIX_UI_PORT:-16006}:6006"
+      - "${PHOENIX_OTLP_GRPC_PORT:-14317}:4317"
+      - "${PHOENIX_OTLP_HTTP_PORT:-14318}:4318"
+    volumes:
+      - phoenix-data:/data
+    restart: unless-stopped
+    networks:
+      - yaguarete-network
+    environment:
+      - PHOENIX_PORT=6006
+
+networks:
+  yaguarete-network:
+    driver: bridge
+
+volumes:
+  phoenix-data:

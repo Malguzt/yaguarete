@@ -7,7 +7,7 @@ from typing import Optional
 class ModelMemoryPredictor:
     """Predicts required VRAM for models based on Hugging Face Hub metadata and local catalog."""
 
-    def __init__(self, catalog=None):
+    def __init__(self, catalog=None) -> None:
         self.api = HfApi()
         self.catalog = catalog
 
@@ -61,13 +61,18 @@ class ModelMemoryPredictor:
                 except:
                     runtime_gb = base_gb
             else:
-                runtime_gb = 16.0 # Fallback 7B
+                runtime_gb = 16.0
+                # Fallback 7B
                 
             # Adjust for target dtype
             multiplier = 1.0
-            if target_dtype == "float32": multiplier = 2.0
-            elif target_dtype == "int8": multiplier = 0.5
-            elif target_dtype == "int4": multiplier = 0.3 # 4-bit + overhead
+            if target_dtype == "float32":
+                multiplier = 2.0
+            elif target_dtype == "int8":
+                multiplier = 0.5
+            elif target_dtype == "int4":
+                multiplier = 0.3
+            # 4-bit + overhead
                 
             runtime_gb = runtime_gb * multiplier
             
@@ -82,4 +87,5 @@ class ModelMemoryPredictor:
 
         except Exception as e:
             print(f"[WARNING] Error predicting model size for {model_id}: {e}")
-            return 16.0 # Safe fallback
+            return 16.0
+            # Safe fallback

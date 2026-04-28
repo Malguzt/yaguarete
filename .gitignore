@@ -124,3 +124,26 @@ dmypy.json
 models/
 checkpoint-*/
 /src/infrastructure/transformers_engine/models/
+
+# Temporary files
+tmp/
+.scannerwork/
+
+# Yaguarete runtime artifacts
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Local logs
+logs/
+*.out
+
+# HF/transformers local cache (if mounted/created inside repo)
+.cache/huggingface/
+.cache/torch/
+
+# Model offload temp folder
+donmingo-offload/

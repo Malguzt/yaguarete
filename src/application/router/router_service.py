@@ -1,6 +1,7 @@
 import uuid
 import time
-from typing import List, Dict, Optional
+import os
+from typing import List, Dict, Optional, Any
 from infrastructure.transformers_engine.model_catalog import ModelCatalog, ModelComplexity, ModelSpecialty
 from infrastructure.repositories.router_stats_repository import RouterStatsRepository
 from infrastructure.transformers_engine.embedding_engine import EmbeddingEngine
@@ -11,12 +12,13 @@ class RouterService:
     Advanced router that selects the best model for a given request.
     Considers: topic, stats, cognitive load, and session history.
     """
-    def __init__(self, stats_repo: RouterStatsRepository, embedding_engine: EmbeddingEngine):
+    def __init__(self, stats_repo: RouterStatsRepository, embedding_engine: EmbeddingEngine) -> None:
         self.catalog = ModelCatalog()
         self.stats_repo = stats_repo
         self.embedding_engine = embedding_engine
+        self.allow_remote = os.getenv("ROUTER_ALLOW_REMOTE_MODELS", "false").lower() in ("1", "true", "yes")
 
-    def route_request(self, prompt: str, session_id: str, embedding: List[float]) -> str:
+    def route_request(self, prompt: str, session_id: str, embedding: list[float]) -> str:
         # 1. Similarity-Based Performance Analysis (k-NN)
         # Find how models performed on semantically similar requests in the past
         similar_performance = self.stats_repo.get_similar_performance(embedding)
@@ -37,8 +39,12 @@ class RouterService:
         
         return best_model.huggingface_id
 
-    def _select_best_model(self, similar_stats: Dict[str, Dict]):
-        all_models = self.catalog.models
+    def _select_best_model(self, similar_stats: dict[str, Dict]) -> Any:
+        all_models = self.catalog.get_generation_models(local_only=not self.allow_remote)
+        if self.allow_remote and not os.getenv("OPENROUTER_API_KEY", "").strip():
+            all_models = [m for m in all_models if not m.is_remote]
+        if not all_models:
+            return self.catalog.get_default_model()
         
         scores = {}
         for model in all_models:
@@ -56,7 +62,8 @@ class RouterService:
                 eff_format = local_stats["avg_format"]
                 eff_judge = local_stats["avg_judge"]
                 eff_sentiment = (local_stats["avg_sentiment"] + 1.0) / 2.0
-                confidence = 0.8 # Higher weight to local similarity
+                confidence = 0.8
+                # Higher weight to local similarity
             elif global_stats:
                 eff_base = global_stats["avg_effectiveness"]
                 eff_format = global_stats["avg_format"]
@@ -73,7 +80,8 @@ class RouterService:
             eff = (eff_base * 0.4) + (eff_format * 0.2) + (eff_judge * 0.3) + (eff_sentiment * 0.1)
             
             # 2. Get Duration & Cost
-            dur = 2000.0 # Default
+            dur = 2000.0
+            # Default
             cost = base_cost
             
             if local_stats:
@@ -87,6 +95,11 @@ class RouterService:
             # Score = (Effectiveness / (Cost * Duration))
             # We add a small constant to cost/dur to avoid division by zero
             score = (eff * 1000000.0) / (max(cost, 0.00001) * max(dur, 100.0))
+
+            # Remote models get an extra prior from OpenRouter popularity metadata.
+            if model.is_remote:
+                popularity = max(0.05, min(1.0, getattr(model, "popularity_score", 0.5)))
+                score *= (0.8 + (0.4 * popularity))
             
             # Apply confidence boost if we have high similarity local stats
             if local_stats:
@@ -107,8 +120,14 @@ class RouterService:
     def select_shadow_model(self, primary_model_id: str, complexity: ModelComplexity) -> Optional[str]:
         """Randomly selects a second model of the same complexity tier for comparison."""
         import random
-        if random.random() > 0.95: # 5% chance of shadowing
-            candidates = [m for m in self.catalog.models if m.complexity == complexity and m.huggingface_id != primary_model_id]
+        if random.random() > 0.95:
+        # 5% chance of shadowing
+            candidates = [
+                m for m in self.catalog.get_generation_models(local_only=not self.allow_remote)
+                if m.complexity == complexity and m.huggingface_id != primary_model_id
+            ]
+            if self.allow_remote and not os.getenv("OPENROUTER_API_KEY", "").strip():
+                candidates = [m for m in candidates if not m.is_remote]
             if candidates:
                 return random.choice(candidates).huggingface_id
         return None

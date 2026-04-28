@@ -16,9 +16,9 @@ from infrastructure.observability.metrics import (
 class ModelArtifactManager:
     """Single responsibility: ensure model artifacts are available locally and emit progress metrics."""
 
-    def __init__(self, node_name: str):
+    def __init__(self, node_name: str) -> None:
         self.node_name = node_name
-        self._download_locks: Dict[str, threading.Lock] = {}
+        self._download_locks: dict[str, threading.Lock] = {}
         self._lock = threading.RLock()
 
     def _get_download_lock(self, model_id: str) -> threading.Lock:
@@ -62,7 +62,6 @@ class ModelArtifactManager:
             snapshot_download(
                 repo_id=model_id,
                 local_files_only=True,
-                resume_download=True,
             )
             self._set_download_progress(model_id, files_completed=1, files_total=1, downloaded_bytes=1, total_bytes=1)
             self._set_download_status(model_id, "success")
@@ -80,7 +79,6 @@ class ModelArtifactManager:
                 snapshot_download(
                     repo_id=model_id,
                     local_files_only=True,
-                    resume_download=True,
                 )
                 self._set_download_progress(model_id, files_completed=1, files_total=1, downloaded_bytes=1, total_bytes=1)
                 MODEL_DOWNLOAD_IN_PROGRESS.labels(model_id=model_id, node=self.node_name).set(0)
@@ -108,7 +106,6 @@ class ModelArtifactManager:
                     snapshot_download(
                         repo_id=model_id,
                         local_files_only=False,
-                        resume_download=True,
                     )
                     self._set_download_progress(model_id, files_completed=1, files_total=1, downloaded_bytes=1, total_bytes=1)
                     MODEL_DOWNLOAD_IN_PROGRESS.labels(model_id=model_id, node=self.node_name).set(0)
@@ -133,7 +130,6 @@ class ModelArtifactManager:
                         repo_id=model_id,
                         filename=repo_file.rfilename,
                         local_files_only=False,
-                        resume_download=True,
                     )
                     completed_files += 1
                     downloaded_bytes += int(getattr(repo_file, "size", 0) or 0)

@@ -15,24 +15,24 @@ from infrastructure.observability.metrics import (
 class HardwareMetricsCollector:
     """Background collector for hardware metrics."""
     
-    def __init__(self, interval: int = 5):
+    def __init__(self, interval: int = 5) -> None:
         self.interval = interval
         self._stop_event = threading.Event()
         self._thread = None
 
-    def start(self):
+    def start(self) -> None:
         if self._thread:
             return
         self._thread = threading.Thread(target=self._collect_loop, daemon=True, name="HardwareMetricsCollector")
         self._thread.start()
         print("[INFO] Hardware metrics collector started")
 
-    def stop(self):
+    def stop(self) -> None:
         self._stop_event.set()
         if self._thread:
             self._thread.join()
 
-    def _collect_loop(self):
+    def _collect_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
                 # CPU & RAM

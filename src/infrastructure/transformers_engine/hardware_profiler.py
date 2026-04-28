@@ -6,7 +6,7 @@ from typing import Dict, Any
 class HardwareProfiler:
     """Profiles system hardware to determine memory constraints for model loading."""
 
-    def __init__(self, memory_margin_percent: float = 0.20):
+    def __init__(self, memory_margin_percent: float = 0.20) -> None:
         """
         Args:
             memory_margin_percent: Float representing the percentage of memory to leave free
@@ -16,7 +16,7 @@ class HardwareProfiler:
         # Coordination headroom reserved per GPU (GB) to avoid hard OOM spikes.
         self.gpu_coordination_headroom_gb = float(os.getenv("GPU_COORDINATION_HEADROOM_GB", "0.25"))
 
-    def get_system_ram_info(self) -> Dict[str, float]:
+    def get_system_ram_info(self) -> dict[str, float]:
         """Returns system RAM info in GB."""
         vm = psutil.virtual_memory()
         # Cap CPU usage to target utilization of total RAM, but never above real available RAM.
@@ -28,7 +28,7 @@ class HardwareProfiler:
             "safe_limit_gb": safe_limit_gb,
         }
 
-    def get_gpu_vram_info(self) -> Dict[int, Dict[str, float]]:
+    def get_gpu_vram_info(self) -> dict[int, dict[str, float]]:
         """Returns vRAM info per GPU in GB."""
         gpu_info = {}
         if torch.cuda.is_available():
@@ -59,12 +59,12 @@ class HardwareProfiler:
         gpu_info = self.get_gpu_vram_info()
         return sum(info["safe_limit_gb"] for info in gpu_info.values())
 
-    def generate_max_memory_mapping(self) -> Dict[Any, str]:
+    def generate_max_memory_mapping(self) -> dict[Any, str]:
         """
         Generates the max_memory dictionary required by HuggingFace's from_pretrained
         to bound memory usage on GPUs and CPU.
         """
-        max_memory: Dict[Any, str] = {}
+        max_memory: dict[Any, str] = {}
         
         # Add GPU limits
         gpu_info = self.get_gpu_vram_info()
